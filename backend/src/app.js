@@ -56,11 +56,13 @@ app.options('*', cors());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// Global standard rate limiter
+// Health routes (unthrottled for monitoring & badges)
+app.use('/api', healthRoutes);
+
+// Global standard rate limiter for application endpoints
 app.use(standardRateLimiter);
 
 // Mount API routes
-app.use('/api', healthRoutes);
 app.use('/api', authRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/conversations', conversationRoutes);

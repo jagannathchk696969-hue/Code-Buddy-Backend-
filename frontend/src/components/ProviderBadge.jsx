@@ -30,10 +30,13 @@ export default function ProviderBadge() {
         }));
       }
     } catch (err) {
+      const isOffline = !navigator.onLine || err.message?.includes('Network') || err.message?.includes('ERR_INTERNET');
       setProviderInfo(prev => ({
         ...prev,
         status: 'error',
-        error: err.message
+        error: isOffline
+          ? 'Internet disconnected. For offline mode with Ollama, run CodeBuddy locally at http://localhost:5173'
+          : (err.message || 'AI service unreachable')
       }));
     } finally {
       setLoading(false);

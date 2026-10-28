@@ -1,20 +1,30 @@
 import axios from 'axios';
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.DEV ? 'http://localhost:5000/api' : 'https://code-buddy-backend-n90q.onrender.com/api');
+export const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('codebuddy_api_url');
+    if (custom) return custom;
+
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocal) {
+      return 'http://localhost:5000/api';
+    }
+  }
+  return import.meta.env.VITE_API_BASE_URL || 'https://code-buddy-backend-n90q.onrender.com/api';
+};
 
 const apiClient = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: getApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json'
   },
   timeout: 65000
 });
 
-// Request Interceptor: Attach Supabase / Demo JWT token
+// Request Interceptor: Attach dynamic base URL and Supabase / Demo JWT token
 apiClient.interceptors.request.use(
   (config) => {
+    config.baseURL = getApiBaseUrl();
     const token = localStorage.getItem('codebuddy_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
