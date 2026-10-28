@@ -1,4 +1,4 @@
-Write-Host "==============================================================" -ForegroundColor Cyan
+Frontend Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host "          CodeBuddy AI - 100% Offline Mode Launcher" -ForegroundColor Cyan
 Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -8,7 +8,8 @@ try {
     $res = ollama list 2>$null
     Write-Host "[v] Ollama is active with installed models:" -ForegroundColor Green
     $res | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-} catch {
+}
+catch {
     Write-Host "[*] Starting Ollama serve..." -ForegroundColor Yellow
     Start-Process -NoNewWindow ollama -ArgumentList "serve"
     Start-Sleep -Seconds 2
