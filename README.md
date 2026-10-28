@@ -106,3 +106,4 @@ npm test
 ## 📄 License
 
 MIT License. Crafted with care for Hacktoberfest.
+

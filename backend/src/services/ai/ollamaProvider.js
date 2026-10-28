@@ -95,9 +95,18 @@ export class OllamaProvider extends AiProvider {
 
       const data = await res.json();
       const models = Array.isArray(data.models) ? data.models : [];
-      const hasModel = models.some(m => m.name === this.model || m.name?.startsWith(this.model));
+      const hasExactModel = models.some(m => m.name === this.model || m.name?.startsWith(this.model));
 
-      if (!hasModel) {
+      if (!hasExactModel) {
+        // If another model is downloaded in Ollama, dynamically adapt to it
+        if (models.length > 0) {
+          this.model = models[0].name;
+          return {
+            status: 'connected',
+            latencyMs,
+            model: this.model
+          };
+        }
         return {
           status: 'error',
           latencyMs,
@@ -107,7 +116,8 @@ export class OllamaProvider extends AiProvider {
 
       return {
         status: 'connected',
-        latencyMs
+        latencyMs,
+        model: this.model
       };
     } catch (err) {
       clearTimeout(timer);

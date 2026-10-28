@@ -142,3 +142,4 @@ CodeBuddy AI strictly **analyzes and explains** student code using LLM reasoning
 ## 📄 License
 
 MIT License. Designed with care for Hacktoberfest.
+

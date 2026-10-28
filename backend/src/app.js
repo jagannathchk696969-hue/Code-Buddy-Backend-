@@ -15,15 +15,42 @@ import dashboardRoutes from './routes/dashboardRoutes.js';
 const app = express();
 
 // Security HTTP headers
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 
-// CORS configuration restricted to frontend origin
+// Chrome Private Network Access preflight support
+app.use((req, res, next) => {
+  if (req.headers['access-control-request-private-network']) {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  }
+  next();
+});
+
+// Permissive CORS configuration supporting Vercel, Render, and Localhost
 app.use(cors({
-  origin: [config.frontendOrigin, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: (origin, callback) => {
+    // Allow tools, curl, and server-to-server requests
+    if (!origin) return callback(null, true);
+
+    // Allow configured frontend, all Vercel deployments, Render, and local dev
+    if (
+      config.frontendOrigin === '*' ||
+      origin === config.frontendOrigin ||
+      /\.vercel\.app$/.test(origin) ||
+      /\.onrender\.com$/.test(origin) ||
+      /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Access-Control-Request-Private-Network']
 }));
+
+app.options('*', cors());
 
 // Request body parser with safe payload limits
 app.use(express.json({ limit: '1mb' }));
