@@ -39,26 +39,194 @@ Be encouraging, accurate, and educational.`;
 
 export class AiService {
   constructor() {
-    this.providerName = config.ai.provider;
-    this.provider = this._createProvider(this.providerName);
-  }
+    this.providerName = (config.ai.provider || 'ollama').toLowerCase();
+    this.ollama = new OllamaProvider();
+    this.gemini = new GeminiProvider();
 
-  _createProvider(providerName) {
-    if (providerName === 'gemini') {
-      return new GeminiProvider();
+    if (this.providerName === 'gemini') {
+      this.primaryProvider = this.gemini;
+      this.fallbackProvider = this.ollama;
+    } else {
+      this.primaryProvider = this.ollama;
+      this.fallbackProvider = this.gemini;
     }
-    return new OllamaProvider();
   }
 
   getProviderInfo() {
     return {
-      provider: this.provider.name,
-      model: this.provider.model
+      provider: this.primaryProvider.name,
+      model: this.primaryProvider.model
     };
   }
 
+  /**
+   * Health check that tests the primary provider, and if unreachable,
+   * automatically checks if the fallback provider is healthy.
+   */
   async healthCheck() {
-    return await this.provider.healthCheck();
+    const primaryHealth = await this.primaryProvider.healthCheck();
+    if (primaryHealth.status === 'connected') {
+      return {
+        provider: this.primaryProvider.name,
+        model: this.primaryProvider.model,
+        ...primaryHealth
+      };
+    }
+
+    if (this.fallbackProvider) {
+      const fallbackHealth = await this.fallbackProvider.healthCheck();
+      if (fallbackHealth.status === 'connected') {
+        return {
+          provider: this.fallbackProvider.name,
+          model: this.fallbackProvider.model,
+          ...fallbackHealth,
+          note: `Primary provider '${this.primaryProvider.name}' unavailable. Auto-fallback active on '${this.fallbackProvider.name}'.`
+        };
+      }
+    }
+
+    return {
+      provider: this.primaryProvider.name,
+      model: this.primaryProvider.model,
+      status: 'error',
+      latencyMs: primaryHealth.latencyMs || 0,
+      error: primaryHealth.error || 'No AI provider currently available'
+    };
+  }
+
+  /**
+   * Smart completion runner with automatic fallback:
+   * 1. Try primary provider.
+   * 2. If primary fails (e.g. invalid Gemini key, offline network), try fallback provider.
+   * 3. If both fail or offline, provide graceful educational guidance without crashing.
+   */
+  async _generateCompletion(systemPrompt, userPrompt, options = {}) {
+    let lastError = null;
+
+    // 1. Try Primary Provider
+    try {
+      const res = await this.primaryProvider.generateCompletion(systemPrompt, userPrompt, options);
+      return {
+        ...res,
+        provider: this.primaryProvider.name,
+        model: this.primaryProvider.model
+      };
+    } catch (err) {
+      lastError = err;
+      console.warn(`[AI] Primary provider '${this.primaryProvider.name}' failed:`, err.message);
+    }
+
+    // 2. Try Fallback Provider
+    if (this.fallbackProvider) {
+      try {
+        console.info(`[AI] Attempting fallback to '${this.fallbackProvider.name}'...`);
+        const res = await this.fallbackProvider.generateCompletion(systemPrompt, userPrompt, options);
+        return {
+          ...res,
+          provider: this.fallbackProvider.name,
+          model: this.fallbackProvider.model
+        };
+      } catch (fallbackErr) {
+        lastError = fallbackErr;
+        console.warn(`[AI] Fallback provider '${this.fallbackProvider.name}' failed:`, fallbackErr.message);
+      }
+    }
+
+    // 3. Graceful Offline Fallback
+    if (options.jsonMode) {
+      const fallbackJson = this._buildOfflineJson(userPrompt);
+      if (fallbackJson) {
+        return {
+          text: JSON.stringify(fallbackJson),
+          raw: null,
+          provider: 'offline-standby',
+          model: 'offline-engine'
+        };
+      }
+    }
+
+    return {
+      text: "👋 I'm currently in **Offline Standby Mode**.\n\n" +
+            "To enable active generative AI reasoning:\n" +
+            "• **For 100% Offline (Local PC)**: Ensure Ollama is running (`ollama serve`) with `gemma3:1b` (`ollama run gemma3:1b`).\n" +
+            "• **For Online (Cloud/Render)**: Add a free `GEMINI_API_KEY` in your environment settings.\n\n" +
+            "You can still write, review, and practice code right inside the Workspace!",
+      raw: null,
+      provider: 'offline-standby',
+      model: 'offline'
+    };
+  }
+
+  /**
+   * Generates sensible structured mock data when completely offline without an active model.
+   */
+  _buildOfflineJson(userPrompt) {
+    if (userPrompt.includes('Source Code to Explain:')) {
+      return {
+        summary: "Offline Code Overview: This program executes sequential statements and function definitions.",
+        concepts: ["Variables", "Control Flow", "Functions"],
+        lineByLine: [
+          { line: 1, code: "Program entry", explanation: "Initializes program context and variables." }
+        ],
+        keyStatements: [
+          "Ensure loop termination conditions are met to avoid infinite execution."
+        ],
+        relatedExample: {
+          title: "Foundational Syntax Example",
+          code: "# Fundamental logic pattern\nx = 10\nprint('Value is:', x)",
+          explanation: "Demonstrates assignment and output formatting."
+        }
+      };
+    }
+
+    if (userPrompt.includes('Observed Error or Issue:')) {
+      return {
+        problemDescription: "Offline Analysis: Potential runtime or boundary discrepancy detected.",
+        probableCause: "Ensure indexing bounds and null/undefined values are handled before access.",
+        relevantSection: "Check input definitions and conditional boundaries.",
+        suggestedCorrection: "// Verify boundary conditions\nif (value != null) { ... }",
+        whyItWorks: "Prevents accessing properties on uninitialized or out-of-bounds references.",
+        preventionTip: "Always validate edge cases like empty collections or 0 inputs.",
+        isCertain: false,
+        confidenceNote: "Offline static guidance"
+      };
+    }
+
+    if (userPrompt.includes('Create a new, solvable programming problem')) {
+      return {
+        title: "Sum of Array Elements",
+        description: "Write a function that accepts an array of integers and returns their sum.",
+        inputDescription: "An array of N integers (-1000 <= arr[i] <= 1000)",
+        outputDescription: "A single integer representing the total sum",
+        constraints: "1 <= N <= 100",
+        sampleInput: "[1, 2, 3, 4, 5]",
+        sampleOutput: "15",
+        conceptPracticed: "Loops and array iteration"
+      };
+    }
+
+    if (userPrompt.includes('requested Level')) {
+      return {
+        level: 1,
+        levelName: "Conceptual Hint (Offline)",
+        hint: "Think about maintaining a running accumulator variable as you visit each item in sequence.",
+        nextLevelAvailable: 2
+      };
+    }
+
+    if (userPrompt.includes('Level 5')) {
+      return {
+        level: 5,
+        levelName: "Full Reference Solution (Offline)",
+        solutionCode: "def solve(items):\n    total = 0\n    for item in items:\n        total += item\n    return total",
+        algorithmExplanation: "Iterates through the collection, adding each value to an accumulator.",
+        keyPoints: ["Initialize accumulator before loop", "Return total after loop completes"],
+        edgeCases: "Handles empty array returning 0",
+        disclaimer: "Offline reference template."
+      };
+    }
+
+    return null;
   }
 
   /**
@@ -90,7 +258,7 @@ Analyze the code and respond in VALID JSON format with this exact JSON structure
 }
 Return only JSON.`;
 
-    const res = await this.provider.generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
+    const res = await this._generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
     const parsed = safeParseJson(res.text);
 
     if (parsed && parsed.summary) {
@@ -100,12 +268,11 @@ Return only JSON.`;
         lineByLine: Array.isArray(parsed.lineByLine) ? parsed.lineByLine : [],
         keyStatements: Array.isArray(parsed.keyStatements) ? parsed.keyStatements : [],
         relatedExample: parsed.relatedExample || null,
-        provider: this.provider.name,
-        model: this.provider.model
+        provider: res.provider,
+        model: res.model
       };
     }
 
-    // Fallback if model returned unstructured narrative
     return {
       summary: res.text.slice(0, 300) + '...',
       concepts: [language, 'Programming logic'],
@@ -113,8 +280,8 @@ Return only JSON.`;
       keyStatements: ['Review the full explanation above'],
       rawExplanation: res.text,
       relatedExample: null,
-      provider: this.provider.name,
-      model: this.provider.model
+      provider: res.provider,
+      model: res.model
     };
   }
 
@@ -143,14 +310,14 @@ Analyze the likely cause and suggest a minimal fix. Respond in VALID JSON with t
 }
 Return only JSON.`;
 
-    const res = await this.provider.generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
+    const res = await this._generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
     const parsed = safeParseJson(res.text);
 
     if (parsed && parsed.problemDescription) {
       return {
         ...parsed,
-        provider: this.provider.name,
-        model: this.provider.model
+        provider: res.provider,
+        model: res.model
       };
     }
 
@@ -163,8 +330,8 @@ Return only JSON.`;
       preventionTip: 'Review syntax and runtime edge cases.',
       isCertain: false,
       confidenceNote: 'General analysis provided.',
-      provider: this.provider.name,
-      model: this.provider.model
+      provider: res.provider,
+      model: res.model
     };
   }
 
@@ -190,7 +357,7 @@ Respond in VALID JSON with this exact structure:
 }
 Return only JSON.`;
 
-    const res = await this.provider.generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
+    const res = await this._generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
     const parsed = safeParseJson(res.text);
 
     if (parsed && parsed.title && parsed.description) {
@@ -206,8 +373,8 @@ Return only JSON.`;
         sampleInput: parsed.sampleInput || '',
         sampleOutput: parsed.sampleOutput || '',
         conceptPracticed: parsed.conceptPracticed || topic,
-        provider: this.provider.name,
-        model: this.provider.model
+        provider: res.provider,
+        model: res.model
       };
     }
 
@@ -216,11 +383,6 @@ Return only JSON.`;
 
   /**
    * Requests progressive hint (Levels 1 to 4).
-   * Level 1: Conceptual hint
-   * Level 2: Approach hint
-   * Level 3: Pseudocode
-   * Level 4: Partial code
-   * Note: Level 5 (Full solution) is strictly blocked from this endpoint.
    */
   async getHint(language, problemTitle, problemDescription, requestedLevel, studentCode = '') {
     const levelNames = {
@@ -260,7 +422,7 @@ Respond in VALID JSON with this structure:
 }
 Return only JSON.`;
 
-    const res = await this.provider.generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
+    const res = await this._generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
     const parsed = safeParseJson(res.text);
 
     if (parsed && parsed.hint) {
@@ -269,8 +431,8 @@ Return only JSON.`;
         levelName: levelNames[requestedLevel],
         hint: parsed.hint,
         nextLevelAvailable: requestedLevel < 4 ? requestedLevel + 1 : null,
-        provider: this.provider.name,
-        model: this.provider.model
+        provider: res.provider,
+        model: res.model
       };
     }
 
@@ -279,14 +441,13 @@ Return only JSON.`;
       levelName: levelNames[requestedLevel],
       hint: res.text,
       nextLevelAvailable: requestedLevel < 4 ? requestedLevel + 1 : null,
-      provider: this.provider.name,
-      model: this.provider.model
+      provider: res.provider,
+      model: res.model
     };
   }
 
   /**
    * Explicitly reveals Level 5 Full Solution with pedagogical walkthrough.
-   * Requires separate action from student.
    */
   async getSolution(language, problemTitle, problemDescription) {
     const userPrompt = `Programming Problem: "${problemTitle}"
@@ -311,7 +472,7 @@ Respond in VALID JSON with this structure:
 }
 Return only JSON.`;
 
-    const res = await this.provider.generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
+    const res = await this._generateCompletion(SYSTEM_PROMPT_BASE, userPrompt, { jsonMode: true });
     const parsed = safeParseJson(res.text);
 
     if (parsed && parsed.solutionCode) {
@@ -323,8 +484,8 @@ Return only JSON.`;
         keyPoints: Array.isArray(parsed.keyPoints) ? parsed.keyPoints : [],
         edgeCases: parsed.edgeCases || 'Check boundary values and empty inputs.',
         disclaimer: 'AI-generated reference solution. Analyze and verify independently.',
-        provider: this.provider.name,
-        model: this.provider.model
+        provider: res.provider,
+        model: res.model
       };
     }
 
@@ -336,8 +497,8 @@ Return only JSON.`;
       keyPoints: [],
       edgeCases: 'Standard edge cases apply.',
       disclaimer: 'AI-generated reference solution.',
-      provider: this.provider.name,
-      model: this.provider.model
+      provider: res.provider,
+      model: res.model
     };
   }
 
@@ -355,12 +516,12 @@ Return only JSON.`;
 
     contextPrompt += `\nStudent: ${message}\n\nTutor: Provide a helpful, clear, educational response. Include concise code snippets where helpful.`;
 
-    const res = await this.provider.generateCompletion(SYSTEM_PROMPT_BASE, contextPrompt);
+    const res = await this._generateCompletion(SYSTEM_PROMPT_BASE, contextPrompt);
     return {
       message: res.text,
       language,
-      provider: this.provider.name,
-      model: this.provider.model
+      provider: res.provider,
+      model: res.model
     };
   }
 }
